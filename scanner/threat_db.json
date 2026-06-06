@@ -1,0 +1,11 @@
+{
+  "sha256": {
+  },
+  "md5": {
+  },
+  "_comment": "Add known-malicious ROM hashes here. Keys are hashes, values are descriptions.",
+  "_sources": [
+    "https://www.virustotal.com",
+    "Community threat intel feeds"
+  ]
+}

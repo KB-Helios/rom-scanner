@@ -1,0 +1,31 @@
+# ROM Scanner runtime data
+ROM_SCANNER_HOME/
+.pipeline-test/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Logs and local DB
+*.log
+scans.db
+scans.db-wal
+scans.db-shm
+manifest.json

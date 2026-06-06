@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rom-scanner"
+version = "1.0.0"
+description = "Security scanner and quarantine pipeline for Nintendo Switch ROM files"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+tray = ["pystray>=0.19", "Pillow>=10.0"]
+dev = ["pytest>=7.0", "ruff>=0.4", "pyrefly>=1.0"]
+
+[project.scripts]
+rom-scanner = "rom_scanner:main"
+rom-scanner-tray = "tray.app:main"
+
+[tool.setuptools]
+py-modules = ["rom_scanner"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scanner*", "parsers*", "tray*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
