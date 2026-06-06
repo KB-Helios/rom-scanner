@@ -88,12 +88,11 @@ def scan_file(filepath: str, *, enabled: bool = True) -> AVScanResult:
             result.clean = False
             result.threat_name = "Defender detected threat"
         elif ("threat" in output_lower or "found" in output_lower) and "no threats" not in output_lower:
-            if "no threats" not in output_lower:
-                result.clean = False
-                for line in result.output.splitlines():
-                    if "threat" in line.lower() or "virus" in line.lower():
-                        result.threat_name = line.strip()
-                        break
+            result.clean = False
+            for line in result.output.splitlines():
+                if "threat" in line.lower() or "virus" in line.lower():
+                    result.threat_name = line.strip()
+                    break
         elif proc.returncode != 0:
             result.clean = False
             result.errors.append(f"Defender exit code {proc.returncode}")

@@ -100,10 +100,31 @@ class XCIParser:
             reserved=header_data[12:16],
         )
 
+        # ── Sanity checks (mirrors NSP parser limits) ──
+        if num_files > 10000:
+            self.errors.append(
+                f"Unreasonable file count: {num_files} (likely corrupt/malicious)"
+            )
+            return False
+
+        if string_table_size > 10_000_000:
+            self.errors.append(
+                f"Unreasonable string table size: {string_table_size}"
+            )
+            return False
+
         # ── Read file table ──
         file_table_size = num_files * self.ENTRY_SIZE
         file_table_data = f.read(file_table_size)
+        if len(file_table_data) < file_table_size:
+            self.errors.append("Truncated file table")
+            return False
+
         string_table_data = f.read(string_table_size)
+        if len(string_table_data) < string_table_size:
+            self.errors.append("Truncated string table")
+            return False
+
         string_table = string_table_data.decode("utf-8", errors="replace")
 
         data_start = 16 + file_table_size + string_table_size
@@ -171,9 +192,26 @@ class XCIParser:
             reserved=header_data[12:16],
         )
 
+        if num_files > 10000:
+            partition.errors.append(
+                f"Unreasonable file count in inner HFS0: {num_files}"
+            )
+            return
+        if string_table_size > 10_000_000:
+            partition.errors.append(
+                f"Unreasonable string table size in inner HFS0: {string_table_size}"
+            )
+            return
+
         file_table_size = num_files * self.ENTRY_SIZE
         file_table_data = f.read(file_table_size)
+        if len(file_table_data) < file_table_size:
+            partition.errors.append("Truncated inner HFS0 file table")
+            return
         string_table_data = f.read(string_table_size)
+        if len(string_table_data) < string_table_size:
+            partition.errors.append("Truncated inner HFS0 string table")
+            return
         inner_string_table = string_table_data.decode("utf-8", errors="replace")
 
         inner_data_start = (
@@ -202,7 +240,7 @@ class XCIParser:
             if ext in self.SUSPICIOUS_EXTENSIONS:
                 entry.is_suspicious = True
                 entry.suspicion_reasons.append(
-                    f"Suspicious extension in XCA: {ext}"
+                    f"Suspicious extension in XCI: {ext}"
                 )
 
             # Compute hashes

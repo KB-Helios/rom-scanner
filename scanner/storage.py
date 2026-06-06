@@ -107,12 +107,9 @@ def find_in_pipeline(
     for stage, stage_dir in paths.items():
         if not stage_dir.exists():
             continue
-        direct = stage_dir / basename
-        if direct.is_file():
-            return stage, direct
-        for candidate in stage_dir.iterdir():
-            if candidate.is_file() and candidate.name == basename:
-                return stage, candidate
+        candidate = stage_dir / basename
+        if candidate.is_file():
+            return stage, candidate
     return None
 
 
