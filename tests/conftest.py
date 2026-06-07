@@ -81,10 +81,12 @@ def pipeline_home(tmp_path, monkeypatch, reset_config_cache):
     home.mkdir()
     monkeypatch.setenv("ROM_SCANNER_HOME", str(home))
     monkeypatch.setenv("ROM_SCANNER_DEFENDER_SCAN", "0")
+    monkeypatch.setenv("ROM_SCANNER_DEFENDER_REQUIRED", "0")
     config_module._config_cache = None
 
     cfg = config_module.default_config(home)
     cfg["scan"]["defender_scan"] = False
+    cfg["scan"]["defender_required"] = False
     cfg["scan"]["risk_threshold"] = 0.3
     with open(home / "config.json", "w", encoding="utf-8") as f:
         json.dump(cfg, f)

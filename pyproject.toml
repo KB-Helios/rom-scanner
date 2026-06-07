@@ -13,6 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 tray = ["pystray>=0.19", "Pillow>=10.0"]
+build = ["pyinstaller>=6.0"]
 dev = ["pytest>=7.0", "ruff>=0.4", "pyrefly>=1.0"]
 
 [project.scripts]
@@ -26,6 +27,9 @@ py-modules = ["rom_scanner"]
 where = ["."]
 include = ["scanner*", "parsers*", "tray*"]
 
+[tool.setuptools.package-data]
+scanner = ["threat_db.json", "homebrew_db.json"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -37,6 +41,9 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "windows: marks tests that only run on Windows",
+]
 
 [tool.pyrefly]
 project-includes = [

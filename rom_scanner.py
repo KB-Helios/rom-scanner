@@ -17,6 +17,7 @@ Usage:
     python rom_scanner.py launch-chrome
     python rom_scanner.py export --format json
     python rom_scanner.py configure-ryujinx
+    python rom_scanner.py update-threat-db [--force]
 """
 
 import argparse
@@ -31,18 +32,26 @@ from pathlib import Path
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent))
 
-from scanner.av_scanner import scan_file as defender_scan
 from scanner.config import get_home, load_config, write_config
 from scanner.db import export_json, init_db
 from scanner.hash_scanner import ContainerReport, HashScanner
-from scanner.manifest import load_manifest, record_scan, update_stage
+from scanner.logging_config import setup_logging
+from scanner.manifest import load_manifest, update_stage
+from scanner.pipeline import (
+    drain_pending,
+    route_verdict,
+)
+from scanner.pipeline import (
+    ingest_path as _pipeline_ingest,
+)
+from scanner.pipeline import (
+    make_scanner as _pipeline_make_scanner,
+)
 from scanner.recovery import recover_orphans
 from scanner.sandbox import SandboxRunner
 from scanner.storage import (
-    copy_to_stage,
     ensure_layout,
     find_in_pipeline,
-    move_from_external,
     move_to_stage,
 )
 from scanner.watch import create_watcher
@@ -205,25 +214,12 @@ def print_sandbox_report(report):
     print()
 
 
-def _make_scanner(args) -> HashScanner:
-    cfg = load_config()
-    scan_cfg = cfg.get("scan", {})
-    vt_key = getattr(args, "vt_key", None)
-    if not vt_key:
-        vt_key = os.environ.get(scan_cfg.get("vt_api_key_env", "VIRUSTOTAL_API_KEY"))
-    threat_db = scan_cfg.get("threat_db_path") or None
-    if threat_db:
-        threat_db = str(threat_db)
-    return HashScanner(vt_api_key=vt_key, threat_db_path=threat_db)
+def _make_scanner(args, home=None) -> HashScanner:
+    return _pipeline_make_scanner(args, home)
 
 
-def _route_verdict(report: ContainerReport, home: Path) -> tuple:
-    """Return (stage, verdict) based on scan report."""
-    cfg = load_config(home)
-    threshold = cfg.get("scan", {}).get("risk_threshold", 0.3)
-    if report.overall_safe and report.risk_score < threshold:
-        return "approved", "approved"
-    return "quarantined", "quarantined"
+def _route_verdict(report: ContainerReport, home=None) -> tuple:
+    return route_verdict(report, home)
 
 
 def _run_recovery(home: Path, quiet: bool = False) -> None:
@@ -231,59 +227,6 @@ def _run_recovery(home: Path, quiet: bool = False) -> None:
     if orphans and not quiet:
         for name, action in orphans:
             print(f"{Colors.YELLOW}Recovery: {name} -> {action}{Colors.RESET}")
-
-
-def _pipeline_scan(
-    scanning_path: Path,
-    home: Path,
-    args,
-    *,
-    json_output: bool = False,
-) -> tuple:
-    """
-    Run Defender + static scan on a file in scanning/ and route to final stage.
-    Returns (report, dest_path, stage, verdict).
-    """
-    cfg = load_config(home)
-    defender_enabled = cfg.get("scan", {}).get("defender_scan", True)
-
-    av_result = defender_scan(str(scanning_path), enabled=defender_enabled)
-    if av_result.scanned and not av_result.clean:
-        dest = move_to_stage(scanning_path, "quarantined", home)
-        report = ContainerReport(
-            filepath=str(dest),
-            file_size=dest.stat().st_size,
-            file_type=dest.suffix.upper().lstrip(".") or "UNKNOWN",
-            is_valid=False,
-            overall_safe=False,
-            risk_score=1.0,
-        )
-        reason = av_result.threat_name or "; ".join(av_result.errors) or "Defender detection"
-        report.parse_errors.append(f"Defender: {reason}")
-        record_scan(report, stage="quarantined", path=dest, verdict="defender_blocked", home=home)
-        return report, dest, "quarantined", "defender_blocked"
-
-    scanner = _make_scanner(args)
-    report = scanner.scan_file(str(scanning_path))
-    stage, verdict = _route_verdict(report, home)
-    dest = move_to_stage(scanning_path, stage, home)
-    record_scan(report, stage=stage, path=dest, verdict=verdict, home=home)
-
-    if getattr(args, "sandbox", False) and stage == "approved":
-        runner = SandboxRunner(verbose=getattr(args, "verbose", False))
-        if runner.is_available():
-            sandbox_report = runner.run_sandbox(
-                str(dest),
-                timeout=getattr(args, "timeout", 60),
-                monitor_network=not getattr(args, "no_network", False),
-            )
-            if not sandbox_report.safe:
-                dest = move_to_stage(dest, "quarantined", home)
-                update_stage(dest.name, stage="quarantined", verdict="sandbox_failed", path=dest, home=home)
-                report.overall_safe = False
-                stage, verdict = "quarantined", "sandbox_failed"
-
-    return report, dest, stage, verdict
 
 
 def _ingest_path(
@@ -295,14 +238,8 @@ def _ingest_path(
     json_output: bool = False,
 ) -> bool:
     """Ingest a file through the pipeline. Returns True on safe outcome."""
-    if from_sandbox:
-        incoming_path = move_from_external(src, "incoming", home)
-    else:
-        incoming_path = copy_to_stage(src, "incoming", home)
-
-    scanning_path = move_to_stage(incoming_path, "scanning", home)
-    report, dest, stage, verdict = _pipeline_scan(
-        scanning_path, home, args, json_output=json_output
+    report, dest, stage, verdict = _pipeline_ingest(
+        src, home, args, from_sandbox=from_sandbox
     )
 
     if json_output:
@@ -375,7 +312,15 @@ def cmd_sandbox(args):
         sys.exit(1)
 
     _, approved_path = located
-    runner = SandboxRunner(verbose=args.verbose)
+    cfg = load_config(home)
+    sandbox_cfg = cfg.get("sandbox", {})
+    preferred = sandbox_cfg.get("preferred_emulator", "auto")
+    runner = SandboxRunner(
+        verbose=args.verbose,
+        preferred_emulator=preferred,
+        monitor_registry=sandbox_cfg.get("monitor_registry", True),
+        monitor_fs_depth=sandbox_cfg.get("monitor_fs_depth", "basic"),
+    )
 
     if not runner.is_available():
         print(f"{Colors.YELLOW}Warning: No Switch emulator found.{Colors.RESET}")
@@ -383,7 +328,7 @@ def cmd_sandbox(args):
         print("  https://ryujinx.org/")
         print()
         print("Running static scan only...")
-        scanner = _make_scanner(args)
+        scanner = _make_scanner(args, home)
         report = scanner.scan_file(str(approved_path))
         print_scan_report(report)
         sys.exit(0 if report.overall_safe else 1)
@@ -401,7 +346,7 @@ def cmd_sandbox(args):
     print_sandbox_report(sandbox_report)
 
     print(f"{Colors.DIM}Running static scan...{Colors.RESET}")
-    scanner = _make_scanner(args)
+    scanner = _make_scanner(args, home)
     static_report = scanner.scan_file(str(approved_path))
     print_scan_report(static_report)
 
@@ -419,6 +364,7 @@ def cmd_ingest(args):
     ensure_layout(home)
     init_db(home)
     _run_recovery(home)
+    drain_pending(home, args, quiet=True)
 
     print(f"{Colors.CYAN}Pipeline home: {home}{Colors.RESET}")
     print(f"{Colors.DIM}Ingesting: {src}{Colors.RESET}")
@@ -522,7 +468,7 @@ def cmd_status(args):
 
 def cmd_quick(args):
     """Quick scan — static analysis only, no VT, minimal output."""
-    scanner = HashScanner()
+    scanner = _make_scanner(args)
 
     if not Path(args.file).exists():
         print(f"{Colors.RED}Error: File not found: {args.file}{Colors.RESET}")
@@ -553,6 +499,14 @@ def cmd_init(args):
     init_db(home)
     _run_recovery(home)
 
+    # Copy bundled threat_db.json if missing
+    _copy_bundled_db(home, "threat_db.json")
+    # Copy bundled homebrew_db.json if missing
+    _copy_bundled_db(home, "homebrew_db.json")
+
+    # Drain any files already waiting in incoming/ after recovery
+    drain_pending(home, quiet=True)
+
     sbx_downloads = Path(load_config(home)["sandboxie"]["downloads_path"])
     sbx_downloads.mkdir(parents=True, exist_ok=True)
 
@@ -562,6 +516,19 @@ def cmd_init(args):
         print(f"  {stage}/: {path}")
     print(f"  Sandbox downloads: {sbx_downloads}")
     sys.exit(0)
+
+
+def _copy_bundled_db(home: Path, filename: str) -> None:
+    """Copy a bundled scanner/ data file to home if not already present."""
+    dest = home / filename
+    if dest.exists():
+        return
+    bundled = Path(__file__).parent / "scanner" / filename
+    if bundled.exists():
+        try:
+            shutil.copy2(str(bundled), str(dest))
+        except OSError:
+            pass
 
 
 def cmd_launch_chrome(args):
@@ -598,8 +565,17 @@ def cmd_watch(args):
     ensure_layout(home)
     init_db(home)
     _run_recovery(home)
+    drain_pending(home, quiet=True)
 
     cfg = load_config(home)
+
+    # Update threat feed on startup if configured
+    try:
+        from scanner.threat_feed import update_if_stale
+        update_if_stale(home, cfg)
+    except Exception:
+        pass
+
     downloads = Path(cfg["sandboxie"]["downloads_path"])
     print(f"{Colors.CYAN}Watching: {downloads}{Colors.RESET}")
     print(f"{Colors.DIM}Poll every {cfg['watch']['poll_interval_sec']}s, "
@@ -608,7 +584,7 @@ def cmd_watch(args):
     class WatchArgs:
         vt_key = getattr(args, "vt_key", None)
         sandbox = False
-        verbose = False
+        verbose = getattr(args, "verbose", False)
         timeout = 60
         no_network = False
 
@@ -625,13 +601,18 @@ def cmd_watch(args):
     watcher = create_watcher(home)
 
     if args.daemon:
-        watcher.run_forever(ingest_callback)
+        drain_cb = None
+        if cfg.get("watch", {}).get("drain_incoming_on_poll", True):
+            drain_cb = lambda: drain_pending(home, watch_args, quiet=True)  # noqa: E731
+        watcher.run_forever(ingest_callback, drain_callback=drain_cb)
     else:
         try:
             while True:
                 for evt in watcher.poll_once():
                     if evt.kind == "stable":
                         ingest_callback(Path(evt.path))
+                if cfg.get("watch", {}).get("drain_incoming_on_poll", True):
+                    drain_pending(home, watch_args, quiet=True)
                 time.sleep(watcher.poll_interval_sec)
         except KeyboardInterrupt:
             print(f"\n{Colors.DIM}Watch stopped.{Colors.RESET}")
@@ -677,6 +658,28 @@ def cmd_configure_ryujinx(args):
     sys.exit(0)
 
 
+def cmd_update_threat_db(args):
+    """Download/update threat_db.json from the configured feed URL."""
+    from scanner.threat_feed import update_if_stale
+
+    home = get_home()
+    cfg = load_config(home)
+    url = cfg.get("scan", {}).get("threat_feed_url", "")
+    if not url:
+        print(f"{Colors.YELLOW}No threat_feed_url configured in config.json.{Colors.RESET}")
+        print(f"{Colors.DIM}Add \"scan\": {{\"threat_feed_url\": \"https://...\"}}{Colors.RESET}")
+        sys.exit(1)
+
+    force = getattr(args, "force", False)
+    print(f"{Colors.CYAN}Checking threat feed: {url}{Colors.RESET}")
+    updated = update_if_stale(home, cfg, force=force)
+    if updated:
+        print(f"{Colors.GREEN}Threat DB updated.{Colors.RESET}")
+    else:
+        print(f"{Colors.DIM}Threat DB is up to date (use --force to override).{Colors.RESET}")
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="🛡️ ROM Scanner & Sandbox — Scan NSP/XCI files for malware",
@@ -695,7 +698,14 @@ Examples:
   rom_scanner.py configure-ryujinx          # Point Ryujinx at approved/
   rom_scanner.py export --format json       # Export manifest
   rom_scanner.py status                     # Show pipeline manifest
+  rom_scanner.py update-threat-db           # Update threat DB from feed
+  rom_scanner.py update-threat-db --force   # Force update regardless of interval
         """,
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose/debug logging",
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -710,7 +720,6 @@ Examples:
     sandbox_parser.add_argument("--timeout", type=int, default=60, help="Sandbox timeout (seconds)")
     sandbox_parser.add_argument("--no-network", action="store_true", help="Disable network monitoring")
     sandbox_parser.add_argument("--vt-key", help="VirusTotal API key")
-    sandbox_parser.add_argument("--verbose", "-v", action="store_true")
     sandbox_parser.set_defaults(func=cmd_sandbox)
 
     quick_parser = subparsers.add_parser("quick", help="Quick safety check")
@@ -773,7 +782,19 @@ Examples:
     )
     ryujinx_parser.set_defaults(func=cmd_configure_ryujinx)
 
+    update_db_parser = subparsers.add_parser(
+        "update-threat-db", help="Download/update threat_db.json from configured feed URL"
+    )
+    update_db_parser.add_argument(
+        "--force", action="store_true",
+        help="Force update even if interval has not elapsed",
+    )
+    update_db_parser.set_defaults(func=cmd_update_threat_db)
+
     args = parser.parse_args()
+
+    # Set up logging after args are parsed
+    setup_logging(verbose=args.verbose)
 
     if not args.command:
         parser.print_help()

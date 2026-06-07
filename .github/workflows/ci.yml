@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -7,13 +7,20 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+env:
+  ROM_SCANNER_DEFENDER_SCAN: "0"
+  ROM_SCANNER_DEFENDER_REQUIRED: "0"
+
 defaults:
   run:
     shell: bash
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Check out code
         uses: actions/checkout@v4

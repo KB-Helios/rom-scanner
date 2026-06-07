@@ -142,6 +142,111 @@ def test_scan_entry_local_match():
     assert scan.local_match == "Known bad"
 
 
+def test_homebrew_entry_bypasses_threat_check(tmp_path: Path):
+    digest = "a" * 64
+    homebrew_db = tmp_path / "homebrew_db.json"
+    homebrew_db.write_text(
+        json.dumps({"entry_sha256": {digest: "Verified homebrew"}, "container_sha256": {}}),
+        encoding="utf-8",
+    )
+    threat_db = tmp_path / "threat_db.json"
+    threat_db.write_text(
+        json.dumps({"sha256": {digest: "Malware label"}, "md5": {}}),
+        encoding="utf-8",
+    )
+    scanner = HashScanner(
+        threat_db_path=str(threat_db),
+        homebrew_db_path=str(homebrew_db),
+    )
+    entry = PFS0FileEntry(index=0, offset=0, size=10, name_offset=0, name="x.nca")
+    entry.sha256 = digest
+    entry.md5 = "b" * 32
+    entry.sha1 = "c" * 40
+    scan = scanner._scan_entry(entry)
+    assert scan.known_homebrew
+    assert not scan.is_suspicious
+    assert scan.suspicion_reasons == []
+
+
+def test_homebrew_trust_disabled_skips_allowlist(tmp_path: Path):
+    digest = "d" * 64
+    homebrew_db = tmp_path / "homebrew_db.json"
+    homebrew_db.write_text(
+        json.dumps({"entry_sha256": {digest: "Verified homebrew"}, "container_sha256": {}}),
+        encoding="utf-8",
+    )
+    scanner = HashScanner(
+        homebrew_db_path=str(homebrew_db),
+        homebrew_trust=False,
+    )
+    assert scanner._homebrew_entry_sha256 == {}
+    entry = PFS0FileEntry(index=0, offset=0, size=10, name_offset=0, name="x.nca")
+    entry.sha256 = digest
+    entry.md5 = "e" * 32
+    entry.sha1 = "f" * 40
+    scan = scanner._scan_entry(entry)
+    assert not scan.known_homebrew
+
+
+def test_homebrew_container_short_circuits_scan(tmp_path: Path, minimal_nsp_path: Path):
+    import hashlib
+
+    container_sha = hashlib.sha256(minimal_nsp_path.read_bytes()).hexdigest()
+    homebrew_db = tmp_path / "homebrew_db.json"
+    homebrew_db.write_text(
+        json.dumps({
+            "entry_sha256": {},
+            "container_sha256": {container_sha: "Known-good homebrew NSP"},
+        }),
+        encoding="utf-8",
+    )
+    scanner = HashScanner(homebrew_db_path=str(homebrew_db))
+    report = scanner.scan_file(str(minimal_nsp_path))
+    assert report.overall_safe
+    assert report.risk_score == 0.0
+    assert report.entries == []
+
+
+def test_overall_safe_respects_custom_threshold(minimal_nsp_path: Path):
+    """A file just above risk_threshold=0.05 should be marked unsafe, but safe with default 0.3."""
+    # Build a scan result with one parse warning (adds 0.1 risk)
+    scanner_strict = HashScanner(risk_threshold=0.05)
+    scanner_lenient = HashScanner(risk_threshold=0.3)
+
+    report_strict = scanner_strict.scan_file(str(minimal_nsp_path))
+    report_lenient = scanner_lenient.scan_file(str(minimal_nsp_path))
+
+    # Both should produce the same risk_score
+    assert report_strict.risk_score == report_lenient.risk_score
+
+    # With a very low threshold, even a minor risk score triggers unsafe
+    # Force a known-risk scenario by manipulating the score directly
+    from scanner.hash_scanner import ContainerReport
+    report = ContainerReport(
+        filepath="x.nsp",
+        file_size=100,
+        file_type="NSP",
+        is_valid=True,
+    )
+    # Simulate 1 parse warning → score = 0.1
+    report.parse_warnings.append("Test warning")
+
+    scanner_low = HashScanner(risk_threshold=0.05)
+    scanner_high = HashScanner(risk_threshold=0.3)
+    scanner_low._compute_risk_score(report)
+    assert not report.overall_safe  # 0.1 >= 0.05
+
+    report2 = ContainerReport(
+        filepath="x.nsp",
+        file_size=100,
+        file_type="NSP",
+        is_valid=True,
+    )
+    report2.parse_warnings.append("Test warning")
+    scanner_high._compute_risk_score(report2)
+    assert report2.overall_safe  # 0.1 < 0.3
+
+
 @pytest.mark.parametrize(
     "positives,expected_min",
     [
@@ -176,3 +281,20 @@ def test_compute_risk_score_vt_weight(positives, expected_min):
         assert report.risk_score == 0.0
     else:
         assert report.risk_score >= expected_min
+
+
+def test_bundled_path_dev_mode():
+    from scanner.hash_scanner import _bundled_path
+
+    path = _bundled_path("threat_db.json")
+    assert path.name == "threat_db.json"
+    assert path.parent.name == "scanner"
+
+
+def test_bundled_path_frozen_mode(monkeypatch):
+    import scanner.hash_scanner as hs
+
+    monkeypatch.setattr(hs.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hs.sys, "_MEIPASS", "/bundle/root", raising=False)
+    path = hs._bundled_path("homebrew_db.json")
+    assert str(path).replace("\\", "/") == "/bundle/root/scanner/homebrew_db.json"

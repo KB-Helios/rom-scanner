@@ -12,6 +12,7 @@ Also runs structural anomaly detection on parsed containers.
 import json
 import logging
 import os
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ class ScanResult:
     vt_permalink: str = ""
     vt_scanned: bool = False
     local_match: str = ""
+    known_homebrew: bool = False
     is_suspicious: bool = False
     suspicion_reasons: List[str] = field(default_factory=list)
 
@@ -56,32 +58,43 @@ class ContainerReport:
     risk_score: float = 0.0  # 0.0 (safe) to 1.0 (dangerous)
 
 
-# ─── Known Malware Hashes (NSP-specific threats) ───
-# These are real known-malicious hashes found in trojanized NSPs
-KNOWN_MALWARE_HASHES_SHA256: Dict[str, str] = {
-    # Placeholder — in production, load from a threat-feed
-    # "abc123...": "Trojanized SX OS installer",
-    # "def456...": "NSP payload dropper",
-}
-
-KNOWN_MALWARE_HASHES_MD5: Dict[str, str] = {
-    # Placeholder
-}
+def _bundled_path(name: str) -> Path:
+    """Return path to a bundled data file, supporting PyInstaller frozen builds."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "scanner" / name
+    return Path(__file__).parent / name
 
 
 class HashScanner:
     """Scan ROM containers for malware and anomalies."""
 
-    def __init__(self, vt_api_key: Optional[str] = None, threat_db_path: Optional[str] = None):
+    def __init__(
+        self,
+        vt_api_key: Optional[str] = None,
+        threat_db_path: Optional[str] = None,
+        risk_threshold: float = 0.3,
+        homebrew_db_path: Optional[str] = None,
+        homebrew_trust: bool = True,
+    ):
         self.vt_api_key = vt_api_key or os.environ.get("VIRUSTOTAL_API_KEY")
+        self._risk_threshold = risk_threshold
+        self._homebrew_trust = homebrew_trust
         if threat_db_path:
             self._local_db_path = Path(threat_db_path)
         else:
-            self._local_db_path = Path(__file__).parent / "threat_db.json"
-        self._malware_sha256 = dict(KNOWN_MALWARE_HASHES_SHA256)
-        self._malware_md5 = dict(KNOWN_MALWARE_HASHES_MD5)
+            self._local_db_path = _bundled_path("threat_db.json")
+        if homebrew_db_path:
+            self._homebrew_db_path: Optional[Path] = Path(homebrew_db_path)
+        else:
+            self._homebrew_db_path = _bundled_path("homebrew_db.json")
+        self._malware_sha256: Dict[str, str] = {}
+        self._malware_md5: Dict[str, str] = {}
+        self._homebrew_entry_sha256: Dict[str, str] = {}
+        self._homebrew_container_sha256: Dict[str, str] = {}
         self._vt_rate_limited = False
         self._load_threat_db()
+        if self._homebrew_trust:
+            self._load_homebrew_db()
 
     def _load_threat_db(self) -> None:
         """Merge threat_db.json into in-memory malware hash tables."""
@@ -102,6 +115,24 @@ class HashScanner:
             if digest.startswith("_"):
                 continue
             self._malware_md5[digest.lower()] = description
+
+    def _load_homebrew_db(self) -> None:
+        """Load homebrew allowlist from homebrew_db.json."""
+        if self._homebrew_db_path is None or not self._homebrew_db_path.exists():
+            return
+        try:
+            with open(self._homebrew_db_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load homebrew DB %s: %s", self._homebrew_db_path, e)
+            return
+
+        for digest, label in data.get("entry_sha256", {}).items():
+            if not digest.startswith("_"):
+                self._homebrew_entry_sha256[digest.lower()] = label
+        for digest, label in data.get("container_sha256", {}).items():
+            if not digest.startswith("_"):
+                self._homebrew_container_sha256[digest.lower()] = label
 
     def scan_file(self, filepath: str) -> ContainerReport:
         """Scan an NSP or XCI file."""
@@ -147,6 +178,13 @@ class HashScanner:
         # Structural checks
         self._check_nsp_structure(parser, report)
 
+        # Check container SHA256 against homebrew allowlist
+        container_sha = _file_sha256(filepath)
+        if container_sha and container_sha.lower() in self._homebrew_container_sha256:
+            report.overall_safe = True
+            report.risk_score = 0.0
+            return report
+
         # Scan each entry
         for entry in parser.entries:
             scan = self._scan_entry(entry)
@@ -179,6 +217,13 @@ class HashScanner:
         # Structural checks
         self._check_xci_structure(parser, report)
 
+        # Check container SHA256 against homebrew allowlist
+        container_sha = _file_sha256(filepath)
+        if container_sha and container_sha.lower() in self._homebrew_container_sha256:
+            report.overall_safe = True
+            report.risk_score = 0.0
+            return report
+
         # Scan each partition's entries
         for partition in parser.partitions:
             for entry in partition.entries:
@@ -203,8 +248,15 @@ class HashScanner:
             suspicion_reasons=entry.suspicion_reasons.copy(),
         )
 
-        # ── Check local malware DB ──
+        # ── Check homebrew allowlist ──
         sha256 = entry.sha256.lower() if entry.sha256 else ""
+        if sha256 and sha256 in self._homebrew_entry_sha256:
+            result.known_homebrew = True
+            result.is_suspicious = False
+            result.suspicion_reasons = []
+            return result
+
+        # ── Check local malware DB ──
         md5 = entry.md5.lower() if entry.md5 else ""
         if sha256 in self._malware_sha256:
             result.local_match = self._malware_sha256[sha256]
@@ -329,7 +381,7 @@ class HashScanner:
             report.overall_suspicious = True
 
     def _compute_risk_score(self, report: ContainerReport):
-        """Compute a 0.0–1.0 risk score."""
+        """Compute a 0.0–1.0 risk score and set overall_safe."""
         if not report.is_valid:
             report.overall_safe = False
             report.risk_score = 1.0
@@ -360,4 +412,17 @@ class HashScanner:
 
         # Normalize to 0.0–1.0
         report.risk_score = min(score, 1.0)
-        report.overall_safe = report.risk_score < 0.3 and not report.overall_suspicious
+        report.overall_safe = report.risk_score < self._risk_threshold and not report.overall_suspicious
+
+
+def _file_sha256(filepath: str) -> Optional[str]:
+    """Compute SHA-256 of a file for container-level homebrew check."""
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None

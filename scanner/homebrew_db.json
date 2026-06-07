@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "updated": "2026-06-07",
+    "description": "Known-good homebrew ROM hashes. Files matching these hashes bypass threat checks.",
+    "note": "Add verified homebrew container SHA-256 hashes here to prevent false positives."
+  },
+  "container_sha256": {},
+  "entry_sha256": {}
+}
