@@ -706,7 +706,7 @@ Examples:
     scan_parser.set_defaults(func=cmd_scan)
 
     sandbox_parser = subparsers.add_parser("sandbox", help="Sandbox run in emulator (approved only)")
-    sandbox_parser.add_argument("file", help="Filename in approved/ stage")
+    sandbox_parser.add_argument("file", help="Collision-resolved basename (as stored in manifest/pipeline)")
     sandbox_parser.add_argument("--timeout", type=int, default=60, help="Sandbox timeout (seconds)")
     sandbox_parser.add_argument("--no-network", action="store_true", help="Disable network monitoring")
     sandbox_parser.add_argument("--vt-key", help="VirusTotal API key")
@@ -734,13 +734,13 @@ Examples:
     promote_parser = subparsers.add_parser(
         "promote", help="Manually promote a pipeline file to approved/"
     )
-    promote_parser.add_argument("file", help="Filename or basename in pipeline")
+    promote_parser.add_argument("file", help="Collision-resolved basename (as stored in manifest/pipeline)")
     promote_parser.set_defaults(func=cmd_promote)
 
     quarantine_parser = subparsers.add_parser(
         "quarantine", help="Explicitly move a pipeline file to quarantined/"
     )
-    quarantine_parser.add_argument("file", help="Filename or basename in pipeline")
+    quarantine_parser.add_argument("file", help="Collision-resolved basename (as stored in manifest/pipeline)")
     quarantine_parser.set_defaults(func=cmd_quarantine)
 
     status_parser = subparsers.add_parser(
