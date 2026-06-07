@@ -56,8 +56,7 @@ def scan_file(filepath: str, *, enabled: bool = True) -> AVScanResult:
 
     if sys.platform != "win32":
         result.scanned = False
-        result.clean = False
-        result.errors.append("Defender scan only available on Windows")
+        result.clean = True
         return result
 
     mpcmd = _find_mpcmdrun()

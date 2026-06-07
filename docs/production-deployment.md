@@ -44,12 +44,12 @@ pip install -e ".[build,tray]"
 .\scripts\build-installer.ps1
 ```
 
-Output: `dist\rom-scanner\`
+Output: `release\rom-scanner\`
 
-- `dist\rom-scanner\rom-scanner.exe` — CLI (console)
-- `dist\rom-scanner\rom-scanner-tray.exe` — System tray (no console window)
+- `release\rom-scanner\rom-scanner.exe` — CLI (console)
+- `release\rom-scanner\rom-scanner-tray.exe` — System tray (no console window)
 
-Copy the entire `dist\rom-scanner\` folder to the target machine. No Python installation
+Copy the entire `release\rom-scanner\` folder to the target machine. No Python installation
 required. Set `ROM_SCANNER_HOME` and run `rom-scanner.exe init` to get started.
 
 To rebuild cleanly:
@@ -135,8 +135,8 @@ For machines without Python installed, build one-file Windows exes from the repo
 Output:
 
 ```
-release\rom-scanner.exe
-release\rom-scanner-tray.exe
+release\rom-scanner\rom-scanner.exe
+release\rom-scanner\rom-scanner-tray.exe
 ```
 
 Bundled `threat_db.json` and `homebrew_db.json` ship inside each exe; `HashScanner` resolves them via `_bundled_path()` when `sys.frozen` is set. Pipeline data (`config.json`, `scans.db`, stage folders) still lives under `ROM_SCANNER_HOME` — run `rom-scanner.exe init` once on the target machine.

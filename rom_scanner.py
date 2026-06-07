@@ -573,8 +573,10 @@ def cmd_watch(args):
     try:
         from scanner.threat_feed import update_if_stale
         update_if_stale(home, cfg)
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("threat feed update failed for home=%s cfg=%s: %s", home, cfg, e, exc_info=True)
 
     downloads = Path(cfg["sandboxie"]["downloads_path"])
     print(f"{Colors.CYAN}Watching: {downloads}{Colors.RESET}")

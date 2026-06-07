@@ -25,8 +25,8 @@ VALID_FEED = json.dumps({
 }).encode()
 
 
-def test_fetch_writes_atomically(tmp_path):
-    dest = tmp_path / "threat_db.json"
+def test_fetch_writes_atomically(pipeline_home: Path):
+    dest = pipeline_home / "threat_db.json"
     mock_resp = _make_mock_response(VALID_FEED, etag='"v1"')
 
     with patch("urllib.request.urlopen", return_value=mock_resp):
@@ -38,8 +38,8 @@ def test_fetch_writes_atomically(tmp_path):
     assert new_etag == '"v1"'
 
 
-def test_fetch_304_not_modified_returns_old_etag(tmp_path):
-    dest = tmp_path / "threat_db.json"
+def test_fetch_304_not_modified_returns_old_etag(pipeline_home: Path):
+    dest = pipeline_home / "threat_db.json"
     dest.write_text(json.dumps({"sha256": {}, "md5": {}}))
 
     def raise_304(*_args, **_kwargs):
@@ -61,8 +61,8 @@ def test_fetch_304_not_modified_returns_old_etag(tmp_path):
     assert dest.exists()
 
 
-def test_fetch_invalid_json_raises(tmp_path):
-    dest = tmp_path / "threat_db.json"
+def test_fetch_invalid_json_raises(pipeline_home: Path):
+    dest = pipeline_home / "threat_db.json"
     mock_resp = _make_mock_response(b"this is not json")
 
     with patch("urllib.request.urlopen", return_value=mock_resp):
@@ -76,7 +76,7 @@ def test_update_if_stale_no_url_skips(pipeline_home: Path):
     assert updated is False
 
 
-def test_update_if_stale_fetches_when_forced(pipeline_home: Path, tmp_path):
+def test_update_if_stale_fetches_when_forced(pipeline_home: Path):
     feed_dest = pipeline_home / "threat_db.json"
     mock_resp = _make_mock_response(VALID_FEED, etag='"v2"')
     cfg = {

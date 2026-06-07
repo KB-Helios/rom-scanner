@@ -179,11 +179,12 @@ class HashScanner:
         self._check_nsp_structure(parser, report)
 
         # Check container SHA256 against homebrew allowlist
-        container_sha = _file_sha256(filepath)
-        if container_sha and container_sha.lower() in self._homebrew_container_sha256:
-            report.overall_safe = True
-            report.risk_score = 0.0
-            return report
+        if self._homebrew_container_sha256:
+            container_sha = _file_sha256(filepath)
+            if container_sha and container_sha.lower() in self._homebrew_container_sha256:
+                report.overall_safe = True
+                report.risk_score = 0.0
+                return report
 
         # Scan each entry
         for entry in parser.entries:
@@ -218,11 +219,12 @@ class HashScanner:
         self._check_xci_structure(parser, report)
 
         # Check container SHA256 against homebrew allowlist
-        container_sha = _file_sha256(filepath)
-        if container_sha and container_sha.lower() in self._homebrew_container_sha256:
-            report.overall_safe = True
-            report.risk_score = 0.0
-            return report
+        if self._homebrew_container_sha256:
+            container_sha = _file_sha256(filepath)
+            if container_sha and container_sha.lower() in self._homebrew_container_sha256:
+                report.overall_safe = True
+                report.risk_score = 0.0
+                return report
 
         # Scan each partition's entries
         for partition in parser.partitions:

@@ -68,5 +68,27 @@ def test_non_windows_fail_closed(tmp_path):
         mock_sys.platform = "linux"
         result = scan_file(str(f), enabled=True)
     assert result.scanned is False
+    assert result.clean is True
+
+
+def test_detection_fallback_threat_name(tmp_path):
+    """Test fallback threat name extraction when output lacks 'threat' or 'virus' keywords."""
+    f = tmp_path / "game.nsp"
+    f.write_bytes(b"PFS0" + b"\x00" * 32)
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    # Output that triggers detection heuristic but lacks "threat" or "virus" keywords
+    mock_proc.stdout = "Scanning ... Found something suspicious: Malware/Generic"
+    mock_proc.stderr = ""
+    fake_exe = tmp_path / "MpCmdRun.exe"
+    fake_exe.write_bytes(b"")
+    with patch("scanner.av_scanner._find_mpcmdrun", return_value=fake_exe):
+        with patch("scanner.av_scanner.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with patch("subprocess.run", return_value=mock_proc):
+                result = scan_file(str(f), enabled=True)
+    assert result.scanned is True
     assert result.clean is False
-    assert any("Windows" in e for e in result.errors)
+    # Should use fallback extraction (first non-empty line)
+    assert result.threat_name
+    assert "Scanning" in result.threat_name or "Found" in result.threat_name

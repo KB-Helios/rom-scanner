@@ -50,10 +50,22 @@ def make_scanner(args, home: Optional[Path] = None) -> HashScanner:
 # ─── Verdict routing ─────────────────────────────────────────────
 
 def route_verdict(report: ContainerReport, home: Optional[Path] = None) -> Tuple[str, str]:
-    """Return (stage, verdict) based on scan report's overall_safe flag."""
-    if report.overall_safe:
-        return "approved", "approved"
-    return "quarantined", "quarantined"
+    """Return (stage, verdict) based on scan report's risk score vs. configured threshold."""
+    cfg = load_config(home)
+    risk_threshold = float(cfg.get("scan", {}).get("risk_threshold", 0.3))
+
+    # Use numeric risk score if available, fall back to overall_safe
+    if hasattr(report, 'risk_score') and report.risk_score is not None:
+        # Also check overall_suspicious flag - it overrides risk_score threshold
+        if report.risk_score <= risk_threshold and not report.overall_suspicious:
+            return "approved", "approved"
+        else:
+            return "quarantined", "quarantined"
+    else:
+        # Fallback for reports without risk_score
+        if report.overall_safe:
+            return "approved", "approved"
+        return "quarantined", "quarantined"
 
 
 # ─── Core pipeline ───────────────────────────────────────────────
@@ -130,12 +142,13 @@ def pipeline_scan(
                 monitor_network=not getattr(args, "no_network", False),
             )
             if not sandbox_report.safe:
-                dest = move_to_stage(dest, "quarantined", home)
+                moved_dest = move_to_stage(dest, "quarantined", home)
                 update_stage(
-                    dest.name, stage="quarantined",
-                    verdict="sandbox_failed", path=dest, home=home,
+                    moved_dest.name, stage="quarantined",
+                    verdict="sandbox_failed", path=moved_dest, home=home,
                 )
                 report.overall_safe = False
+                dest = moved_dest
                 stage, verdict = "quarantined", "sandbox_failed"
 
     return report, dest, stage, verdict

@@ -111,7 +111,8 @@ def update_if_stale(home: Path, cfg: Optional[dict] = None, *, force: bool = Fal
     updated = False
     try:
         new_etag = fetch_threat_feed(url, threat_db_path, etag=etag)
-        updated = True
+        # Only mark as updated if the ETag changed (i.e., new content was written)
+        updated = (new_etag != etag)
     except urllib.error.URLError as e:
         logger.warning("Threat feed fetch failed: %s", e)
         updated = False

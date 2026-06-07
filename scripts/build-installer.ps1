@@ -1,10 +1,29 @@
 # Build standalone Windows executables with PyInstaller.
 # Run from the repository root: .\scripts\build-installer.ps1
 
+Param(
+    [switch]$Clean
+)
+
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $RepoRoot
+
+$DistDir = Join-Path $RepoRoot "dist"
+$ReleaseDir = Join-Path $RepoRoot "release"
+
+if ($Clean) {
+    Write-Host "Cleaning build directories..." -ForegroundColor Yellow
+    if (Test-Path $DistDir) {
+        Remove-Item -Recurse -Force $DistDir
+    }
+    if (Test-Path $ReleaseDir) {
+        Remove-Item -Recurse -Force $ReleaseDir
+    }
+    Write-Host "Clean complete." -ForegroundColor Green
+    exit 0
+}
 
 Write-Host "Installing build dependencies..." -ForegroundColor Cyan
 python -m pip install -e ".[build,tray]"
@@ -12,8 +31,6 @@ python -m pip install -e ".[build,tray]"
 Write-Host "Building executables (rom-scanner, rom-scanner-tray)..." -ForegroundColor Cyan
 python -m PyInstaller --noconfirm --clean rom_scanner.spec
 
-$DistDir = Join-Path $RepoRoot "dist"
-$ReleaseDir = Join-Path $RepoRoot "release"
 if (-not (Test-Path $DistDir)) {
     Write-Error "PyInstaller dist/ folder not found."
 }

@@ -28,12 +28,15 @@ def test_orphan_quarantined_with_verdict(pipeline_home: Path):
     assert (paths["quarantined"] / "crashed.nsp").is_file()
 
 
-def test_recovered_orphan_is_scanned(pipeline_home: Path):
+def test_recovered_orphan_is_scanned(pipeline_home: Path, monkeypatch):
     """Orphan in scanning/ should be requeued then drained to approved/ or quarantined/."""
     import types
 
     from scanner.db import init_db
     from scanner.pipeline import drain_pending
+
+    # Disable Defender to avoid platform-dependent behavior
+    monkeypatch.setenv('ROM_SCANNER_DEFENDER_SCAN', '0')
 
     paths = ensure_layout(pipeline_home)
     init_db(pipeline_home)

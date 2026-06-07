@@ -296,11 +296,15 @@ class SandboxRunner:
         if not parts:
             return False
         if sys.platform == "win32":
-            # TCP/UDP ... ESTABLISHED <pid>
-            return parts[-1] == str(pid) and "ESTABLISHED" in line
-        # ss -tupn: ... users:(("proc",pid=1234,fd=...))
+            # Windows: check if last field is the PID (accept ESTABLISHED, UDP, LISTENING, etc.)
+            if parts[-1] == str(pid):
+                return True
+            # Also accept if line contains UDP or other states with the PID
+            return str(pid) in line and ("UDP" in line or "ESTABLISHED" in line or "LISTEN" in line)
+        # Unix (ss -tupn): ... users:(("proc",pid=1234,fd=...))
         pid_marker = f"pid={pid}"
-        return pid_marker in line and "ESTAB" in line
+        # Accept if PID marker is present, regardless of ESTAB state (includes UDP)
+        return pid_marker in line
 
     def _check_network_connections(
         self, pid: int

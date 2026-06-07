@@ -69,9 +69,14 @@ def test_netstat_pid_matches():
     runner.monitor_fs_depth = "basic"
     pid = 4242
     line = "  TCP    10.0.0.1:443    192.168.1.1:50123    ESTABLISHED    4242"
-    assert runner._netstat_pid_matches(line, pid) is True
-    assert runner._netstat_pid_matches(line, 9999) is False
-    assert runner._netstat_pid_matches("  TCP    0.0.0.0:80    0.0.0.0:0    LISTENING    4242", pid) is False
+    # Mock sys.platform to test Windows netstat format
+    with patch("scanner.sandbox.sys.platform", "win32"):
+        assert runner._netstat_pid_matches(line, pid) is True
+        assert runner._netstat_pid_matches(line, 9999) is False
+        # After relaxed PID matching, LISTENING connections with matching PID are now accepted
+        assert runner._netstat_pid_matches("  TCP    0.0.0.0:80    0.0.0.0:0    LISTENING    4242", pid) is True
+        # UDP connections with matching PID are also accepted
+        assert runner._netstat_pid_matches("  UDP    0.0.0.0:53    *:*    4242", pid) is True
 
 
 def test_temp_snapshot_diff_detects_new_exe(tmp_path, monkeypatch):
@@ -87,8 +92,10 @@ def test_temp_snapshot_diff_detects_new_exe(tmp_path, monkeypatch):
     dropper = temp_dir / "payload.exe"
     dropper.write_bytes(b"MZ")
     events = runner._temp_snapshot_diff_events()
-    assert any("payload.exe" in e["description"] for e in events)
-    assert events[0]["severity"] == "critical"
+    # Order-independent assertion: find the event that matches payload.exe and check its severity
+    payload_events = [e for e in events if "payload.exe" in e["description"]]
+    assert len(payload_events) > 0
+    assert any(e["severity"] == "critical" for e in payload_events)
 
 
 def test_diff_registry_skipped_when_disabled():

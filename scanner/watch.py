@@ -153,8 +153,10 @@ class DownloadWatcher:
             if drain_callback is not None:
                 try:
                     drain_callback()
-                except Exception:
-                    pass
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.exception("drain_callback failed: %s", e)
             time.sleep(self.poll_interval_sec)
 
 
