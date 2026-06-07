@@ -100,6 +100,12 @@ def find_in_pipeline(
 ) -> Optional[tuple]:
     """
     Locate a file by basename across all stages.
+
+    IMPORTANT: The 'name' parameter must be the collision-resolved basename
+    (i.e., the actual filename as stored on disk, including any _N suffix
+    added by unique_dest()/move_to_stage()). This function performs an exact
+    basename match and does NOT resolve collisions.
+
     Returns (stage_name, path) or None.
     """
     paths = stage_paths(home)
@@ -107,12 +113,9 @@ def find_in_pipeline(
     for stage, stage_dir in paths.items():
         if not stage_dir.exists():
             continue
-        direct = stage_dir / basename
-        if direct.is_file():
-            return stage, direct
-        for candidate in stage_dir.iterdir():
-            if candidate.is_file() and candidate.name == basename:
-                return stage, candidate
+        candidate = stage_dir / basename
+        if candidate.is_file():
+            return stage, candidate
     return None
 
 

@@ -36,6 +36,13 @@ def recover_orphans(
 
         if requeue:
             dest = move_to_stage(candidate, "incoming", root)
+            update_stage(
+                dest.name,
+                stage="incoming",
+                verdict="scan_interrupted_requeued",
+                path=dest,
+                home=root,
+            )
             results.append((dest.name, "requeued"))
         else:
             dest = move_to_stage(candidate, "quarantined", root)

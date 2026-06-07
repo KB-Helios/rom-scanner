@@ -23,16 +23,29 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "scan": {
         "vt_api_key_env": "VIRUSTOTAL_API_KEY",
         "defender_scan": True,
+        "defender_required": True,
         "risk_threshold": 0.3,
         "threat_db_path": "",
+        "homebrew_db_path": "",
+        "homebrew_trust": True,
+        "threat_feed_url": "",
+        "threat_feed_interval_hours": 24,
+        "threat_feed_last_check": "",
+        "threat_feed_etag": "",
     },
     "watch": {
         "poll_interval_sec": 5,
         "stable_size_sec": 10,
         "extensions": [".nsp", ".xci"],
+        "drain_incoming_on_poll": True,
     },
     "ryujinx": {
         "games_path": str(DEFAULT_HOME / "approved"),
+    },
+    "sandbox": {
+        "preferred_emulator": "auto",
+        "monitor_registry": True,
+        "monitor_fs_depth": "basic",
     },
 }
 
@@ -82,6 +95,9 @@ def default_config(home: Optional[Path] = None) -> Dict[str, Any]:
         root / "sbx/RomQuarantine/user/current/Downloads"
     )
     cfg["ryujinx"]["games_path"] = str(root / "approved")
+    # Default DB paths under home
+    cfg["scan"]["threat_db_path"] = str(root / "threat_db.json")
+    cfg["scan"]["homebrew_db_path"] = str(root / "homebrew_db.json")
     return cfg
 
 
@@ -117,6 +133,9 @@ def load_config(home: Optional[Path] = None, *, reload: bool = False) -> Dict[st
 
     if os.environ.get("ROM_SCANNER_DEFENDER_SCAN") == "0":
         cfg.setdefault("scan", {})["defender_scan"] = False
+
+    if os.environ.get("ROM_SCANNER_DEFENDER_REQUIRED") == "0":
+        cfg.setdefault("scan", {})["defender_required"] = False
 
     if home is None and not reload:
         _config_cache = cfg

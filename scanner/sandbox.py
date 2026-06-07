@@ -71,29 +71,81 @@ class SandboxRunner:
         "/app/bin/Ryujinx",
     ]
 
-    def __init__(self, verbose: bool = False):
+    YUZU_PATHS = [
+        # Windows standard install paths
+        os.path.expanduser("~/AppData/Roaming/yuzu/yuzu.exe"),
+        os.path.expanduser("~/AppData/Local/yuzu/yuzu-windows-msvc/yuzu.exe"),
+        "C:/Program Files/yuzu/yuzu.exe",
+        "C:/Program Files (x86)/yuzu/yuzu.exe",
+        os.path.expanduser("~/AppData/Local/Programs/yuzu/yuzu.exe"),
+    ]
+
+    SUSPICIOUS_EXTENSIONS = {
+        ".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs",
+        ".js", ".py", ".sh", ".msi", ".scr",
+    }
+
+    DEEP_FS_DIRS = [
+        "~/AppData/Roaming",
+        "~/AppData/Local",
+        "~/.local/share",
+        "~/Desktop",
+        "~/Documents",
+    ]
+
+    def __init__(
+        self,
+        verbose: bool = False,
+        preferred_emulator: str = "auto",
+        *,
+        monitor_registry: bool = True,
+        monitor_fs_depth: str = "basic",
+    ):
         self.verbose = verbose
+        self.preferred_emulator = preferred_emulator.lower()
+        self.monitor_registry = monitor_registry
+        self.monitor_fs_depth = monitor_fs_depth.lower()
         self.emulator_path: Optional[str] = None
         self.emulator_name: str = ""
+        self._temp_fs_baseline: set = set()
+        self._reported_fs_paths: set = set()
         self._find_emulator()
 
     def _find_emulator(self) -> bool:
         """Locate an installed Switch emulator."""
-        # Try Ryujinx first
+        if self.preferred_emulator == "yuzu":
+            return self._try_yuzu() or self._try_ryujinx()
+        # Default: try Ryujinx first, then Yuzu
+        return self._try_ryujinx() or self._try_yuzu()
+
+    def _try_ryujinx(self) -> bool:
+        """Try to locate Ryujinx."""
         for path in self.RYUJINX_PATHS:
             if Path(path).exists():
                 self.emulator_path = path
                 self.emulator_name = "Ryujinx"
                 return True
-
-        # Check PATH
         for name in ["Ryujinx", "ryujinx"]:
             found = shutil.which(name)
             if found:
                 self.emulator_path = found
                 self.emulator_name = "Ryujinx"
                 return True
+        return False
 
+    def _try_yuzu(self) -> bool:
+        """Try to locate Yuzu."""
+        for path in self.YUZU_PATHS:
+            if Path(path).exists():
+                self.emulator_path = path
+                self.emulator_name = "Yuzu"
+                return True
+        for name in ["yuzu", "yuzu-cmd"]:
+            found = shutil.which(name)
+            if found:
+                self.emulator_path = found
+                self.emulator_name = "Yuzu"
+                return True
         return False
 
     def is_available(self) -> bool:
@@ -137,7 +189,10 @@ class SandboxRunner:
         rom_path = str(Path(rom_path).resolve())
 
         # ── Pre-sandbox: snapshot state ──
+        self._temp_fs_baseline = self._snapshot_temp_files()
+        self._reported_fs_paths = set()
         pre_state = self._snapshot_system_state()
+        pre_state["temp_files"] = set(self._temp_fs_baseline)
 
         # ── Launch emulator ──
         cmd = self._build_command(rom_path)
@@ -198,11 +253,10 @@ class SandboxRunner:
 
     def _build_command(self, rom_path: str) -> List[str]:
         """Build the emulator launch command."""
-        if self.emulator_name == "Ryujinx":
-            return [
-                str(self.emulator_path),
-                rom_path,
-            ]
+        if self.emulator_name == "Yuzu":
+            # Yuzu uses -g flag to load a game
+            return [str(self.emulator_path), "-g", rom_path]
+        # Ryujinx and default: positional argument
         return [str(self.emulator_path), rom_path]
 
     def _monitor_process(
@@ -236,29 +290,51 @@ class SandboxRunner:
 
         return events
 
+    def _netstat_pid_matches(self, line: str, pid: int) -> bool:
+        """Return True if a netstat/ss line belongs to the given PID."""
+        parts = line.split()
+        if not parts:
+            return False
+        if sys.platform == "win32":
+            # Windows: check if last field is the PID (accept ESTABLISHED, UDP, LISTENING, etc.)
+            if parts[-1] == str(pid):
+                return True
+            # Also accept if line contains UDP or other states with the PID
+            return str(pid) in line and ("UDP" in line or "ESTABLISHED" in line or "LISTEN" in line)
+        # Unix (ss -tupn): ... users:(("proc",pid=1234,fd=...))
+        pid_marker = f"pid={pid}"
+        # Accept if PID marker is present, regardless of ESTAB state (includes UDP)
+        return pid_marker in line
+
     def _check_network_connections(
         self, pid: int
     ) -> List[Dict]:
-        """Check for unexpected network connections."""
+        """Check for unexpected network connections, filtered by PID."""
         events = []
+        allowed = ["nintendo", "cdn", "nintendoswitch"]
         try:
-            # Use netstat/ss to find connections
             if sys.platform == "win32":
                 result = subprocess.run(
                     ["netstat", "-ano"],
                     capture_output=True, text=True, timeout=10,
                 )
+                for line in result.stdout.splitlines():
+                    if not self._netstat_pid_matches(line, pid):
+                        continue
+                    if not any(d in line.lower() for d in allowed):
+                        events.append({
+                            "category": "network",
+                            "severity": "high",
+                            "description": f"Unexpected network connection: {line.strip()}",
+                        })
             else:
                 result = subprocess.run(
                     ["ss", "-tupn"],
                     capture_output=True, text=True, timeout=10,
                 )
-
-            # Look for established connections from this PID
-            for line in result.stdout.splitlines():
-                if str(pid) in line and "ESTABLISHED" in line:
-                    # Allow known Nintendo domains
-                    allowed = ["nintendo", "cdn", "nintendoswitch"]
+                for line in result.stdout.splitlines():
+                    if not self._netstat_pid_matches(line, pid):
+                        continue
                     if not any(d in line.lower() for d in allowed):
                         events.append({
                             "category": "network",
@@ -270,24 +346,129 @@ class SandboxRunner:
 
         return events
 
+    def _snapshot_temp_files(self) -> set:
+        """Snapshot file paths in the system temp directory."""
+        temp_dir = tempfile.gettempdir()
+        snapshot: set = set()
+        try:
+            for entry in os.listdir(temp_dir):
+                full = os.path.join(temp_dir, entry)
+                try:
+                    if os.path.isfile(full):
+                        snapshot.add(full)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        return snapshot
+
+    def _temp_snapshot_diff_events(self) -> List[Dict]:
+        """Compare current temp dir against pre-sandbox baseline."""
+        events: List[Dict] = []
+        current = self._snapshot_temp_files()
+        new_files = current - self._temp_fs_baseline - self._reported_fs_paths
+
+        for path in new_files:
+            ext = Path(path).suffix.lower()
+            if ext in self.SUSPICIOUS_EXTENSIONS:
+                events.append({
+                    "category": "filesystem",
+                    "severity": "critical",
+                    "description": f"Suspicious file dropped in temp: {path}",
+                    "path": path,
+                    "extension": ext,
+                })
+            elif ext:
+                events.append({
+                    "category": "filesystem",
+                    "severity": "low",
+                    "description": f"New file in temp dir: {path}",
+                    "path": path,
+                })
+            self._reported_fs_paths.add(path)
+
+        return events
+
+    def _deep_fs_scan_events(self) -> List[Dict]:
+        """Deep mode: flag recently modified executables outside temp."""
+        events: List[Dict] = []
+        cutoff = time.time() - 10
+        for rel in self.DEEP_FS_DIRS:
+            check_path = Path(os.path.expanduser(rel))
+            if not check_path.exists():
+                continue
+            try:
+                for entry in check_path.iterdir():
+                    if not entry.is_file():
+                        continue
+                    ext = entry.suffix.lower()
+                    if ext not in self.SUSPICIOUS_EXTENSIONS:
+                        continue
+                    path_str = str(entry)
+                    if path_str in self._reported_fs_paths:
+                        continue
+                    try:
+                        if entry.stat().st_mtime > cutoff:
+                            events.append({
+                                "category": "filesystem",
+                                "severity": "high",
+                                "description": f"Executable file recently modified: {entry}",
+                                "path": path_str,
+                            })
+                            self._reported_fs_paths.add(path_str)
+                    except OSError:
+                        pass
+            except (OSError, PermissionError):
+                pass
+        return events
+
     def _check_filesystem_activity(
         self, pid: int
     ) -> List[Dict]:
-        """Check for suspicious filesystem activity."""
-        events = []
+        """Check filesystem activity via pre/post temp snapshot diff."""
+        events = self._temp_snapshot_diff_events()
+        if self.monitor_fs_depth == "deep":
+            events.extend(self._deep_fs_scan_events())
+        return events
 
-        # Check for suspicious new files in common locations
-        _suspicious_dirs = [
-            os.path.expanduser("~/AppData/Roaming"),
-            os.path.expanduser("~/AppData/Local"),
-            os.path.expanduser("~/.local/share"),
-            os.path.expanduser("~/Desktop"),
-            os.path.expanduser("~/Documents"),
+    def _reg_query(self, key: str) -> List[str]:
+        """Query a Windows registry key; return list of value strings."""
+        if sys.platform != "win32":
+            return []
+        try:
+            result = subprocess.run(
+                ["reg", "query", key],
+                capture_output=True, text=True, timeout=10,
+            )
+            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        except Exception:
+            return []
+
+    def _snapshot_registry(self) -> Dict[str, List[str]]:
+        """Snapshot Windows Run/RunOnce registry keys."""
+        if sys.platform != "win32":
+            return {}
+        run_keys = [
+            r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+            r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
         ]
+        return {key: self._reg_query(key) for key in run_keys}
 
-        # This is a simplified check — in production you'd use
-        # inotify or a proper FS monitor
-        return events  # Real-time FS monitoring happens via state diff
+    def _diff_registry(self, pre: Dict[str, List[str]], report: SandboxReport):
+        """Compare pre/post registry snapshots and emit events for new entries."""
+        post = self._snapshot_registry()
+        for key, post_values in post.items():
+            pre_values = set(pre.get(key, []))
+            for val in post_values:
+                if val not in pre_values:
+                    report.add_event(
+                        "registry", "critical",
+                        f"New registry Run entry: {val}",
+                        key=key,
+                        value=val,
+                    )
 
     def _snapshot_system_state(self) -> Dict:
         """Take a snapshot of system state before sandboxing."""
@@ -295,6 +476,7 @@ class SandboxRunner:
             "timestamp": datetime.utcnow().isoformat(),
             "temp_files": set(),
             "running_processes": set(),
+            "registry": {},
         }
 
         # Snapshot running processes
@@ -320,52 +502,20 @@ class SandboxRunner:
         except Exception:
             pass
 
-        # Snapshot temp directory
-        temp_dir = tempfile.gettempdir()
-        try:
-            for entry in os.listdir(temp_dir):
-                full = os.path.join(temp_dir, entry)
-                try:
-                    state["temp_files"].add(full)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # Snapshot temp directory (reuse baseline captured at run start)
+        state["temp_files"] = set(self._temp_fs_baseline)
+
+        # Snapshot registry Run keys (Windows only)
+        if self.monitor_registry:
+            state["registry"] = self._snapshot_registry()
 
         return state
 
     def _diff_system_state(self, pre: Dict, report: SandboxReport):
         """Compare post-run state to pre-run state."""
-        # Check for new temp files (potential dropper behavior)
-        temp_dir = tempfile.gettempdir()
-        try:
-            current_files = set()
-            for entry in os.listdir(temp_dir):
-                full = os.path.join(temp_dir, entry)
-                current_files.add(full)
-
-            new_files = current_files - pre["temp_files"]
-            suspicious_extensions = {
-                ".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs",
-                ".js", ".py", ".sh", ".msi", ".scr",
-            }
-
-            for f in new_files:
-                ext = Path(f).suffix.lower()
-                if ext in suspicious_extensions:
-                    report.add_event(
-                        "filesystem", "critical",
-                        f"Suspicious file dropped in temp: {f}",
-                        path=f, extension=ext,
-                    )
-                elif ext:
-                    report.add_event(
-                        "filesystem", "low",
-                        f"New file in temp dir: {f}",
-                        path=f,
-                    )
-        except Exception:
-            pass
+        # Final temp snapshot diff (catches files created after last poll)
+        for evt in self._temp_snapshot_diff_events():
+            report.add_event(**evt)
 
         # Check for new processes (potential process spawning)
         try:
@@ -395,6 +545,10 @@ class SandboxRunner:
                         )
         except Exception:
             pass
+
+        # Check registry for new Run/RunOnce entries
+        if self.monitor_registry:
+            self._diff_registry(pre.get("registry", {}), report)
 
     def _compute_risk(self, report: SandboxReport):
         """Compute risk score from sandbox events."""

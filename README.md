@@ -65,7 +65,7 @@ python rom_scanner.py sandbox game.nsp
 
 After `pip install -e .`, use the `rom-scanner` command instead of `python rom_scanner.py`.
 
-CI runs ruff, pyrefly, and pytest on **windows-latest** via
+CI runs ruff, pyrefly, and pytest on **ubuntu-latest and windows-latest** via
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Pyrefly is Meta's fast Rust-based Python type
 checker; configuration lives in `[tool.pyrefly]` in `pyproject.toml`.
 

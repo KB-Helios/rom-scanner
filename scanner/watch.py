@@ -42,6 +42,7 @@ class DownloadWatcher:
     on_event: Optional[Callable[[WatchEvent], None]] = None
     _tracked: Dict[str, _TrackedFile] = field(default_factory=dict, init=False)
     _processed: Set[str] = field(default_factory=set, init=False)
+    _last_stable: List[Path] = field(default_factory=list, init=False)
 
     def __post_init__(self):
         if self.downloads_path is None:
@@ -72,6 +73,7 @@ class DownloadWatcher:
 
     def poll_once(self) -> List[WatchEvent]:
         """Single poll iteration; returns events."""
+        self._last_stable = []
         events: List[WatchEvent] = []
         dl_dir = self.downloads_path
         if dl_dir is None or not dl_dir.exists():
@@ -108,6 +110,7 @@ class DownloadWatcher:
                 continue
 
             if now - tracked.stable_since >= self.stable_size_sec:
+                self._last_stable.append(path)
                 events.append(self._emit("stable", path, f"size={size}"))
                 del self._tracked[key]
                 self._processed.add(key)
@@ -121,7 +124,15 @@ class DownloadWatcher:
 
         return events
 
-    def run_forever(self, ingest_callback: Callable[[Path], bool]) -> None:
+    def get_stable_files(self) -> List[Path]:
+        """Return paths that became stable in the last poll_once()."""
+        return list(self._last_stable)
+
+    def run_forever(
+        self,
+        ingest_callback: Callable[[Path], bool],
+        drain_callback: Optional[Callable[[], None]] = None,
+    ) -> None:
         """Run watch loop until interrupted."""
         while True:
             for evt in self.poll_once():
@@ -139,11 +150,14 @@ class DownloadWatcher:
                             self._emit("failed", path, "ingest returned failure")
                     except Exception as e:
                         self._emit("failed", path, str(e))
+            if drain_callback is not None:
+                try:
+                    drain_callback()
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.exception("drain_callback failed: %s", e)
             time.sleep(self.poll_interval_sec)
-
-    def get_stable_files(self) -> List[Path]:
-        """Return paths that became stable in the last poll_once (internal use)."""
-        return []
 
 
 def create_watcher(home: Optional[Path] = None, **kwargs) -> DownloadWatcher:

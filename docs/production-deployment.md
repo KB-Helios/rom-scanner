@@ -35,6 +35,29 @@ The installer:
 3. Registers Task Scheduler task **RomScannerWatch** (`rom-scanner watch --daemon` at logon)
 4. Adds a Startup shortcut for **rom-scanner-tray**
 
+## Standalone installer (no Python required)
+
+Build self-contained executables with PyInstaller:
+
+```powershell
+pip install -e ".[build,tray]"
+.\scripts\build-installer.ps1
+```
+
+Output: `release\rom-scanner\`
+
+- `release\rom-scanner\rom-scanner.exe` — CLI (console)
+- `release\rom-scanner\rom-scanner-tray.exe` — System tray (no console window)
+
+Copy the entire `release\rom-scanner\` folder to the target machine. No Python installation
+required. Set `ROM_SCANNER_HOME` and run `rom-scanner.exe init` to get started.
+
+To rebuild cleanly:
+
+```powershell
+.\scripts\build-installer.ps1 -Clean
+```
+
 ## Manual setup
 
 ### 1. Install the package
@@ -75,7 +98,7 @@ Foreground (debugging):
 rom-scanner watch --verbose
 ```
 
-Background:
+Background (`--daemon` also drains `incoming/` each poll when `watch.drain_incoming_on_poll` is true):
 
 ```powershell
 rom-scanner watch --daemon
@@ -100,6 +123,67 @@ Tray menu:
 - **Launch sandboxed Chrome** — `rom-scanner launch-chrome`
 - **Start / stop watch daemon** — subprocess control
 - **Exit**
+
+## Standalone executables (PyInstaller)
+
+For machines without Python installed, build one-file Windows exes from the repo:
+
+```powershell
+.\scripts\build-installer.ps1
+```
+
+Output:
+
+```
+release\rom-scanner\rom-scanner.exe
+release\rom-scanner\rom-scanner-tray.exe
+```
+
+Bundled `threat_db.json` and `homebrew_db.json` ship inside each exe; `HashScanner` resolves them via `_bundled_path()` when `sys.frozen` is set. Pipeline data (`config.json`, `scans.db`, stage folders) still lives under `ROM_SCANNER_HOME` — run `rom-scanner.exe init` once on the target machine.
+
+Optional build extra:
+
+```powershell
+python -m pip install -e ".[build,tray]"
+python -m PyInstaller --noconfirm --clean rom_scanner.spec
+```
+
+Point Task Scheduler and Startup shortcuts at the `.exe` paths instead of pip entry points when deploying frozen builds.
+
+## Threat feed
+
+Configure a remote JSON feed in `config.json`:
+
+```json
+{
+  "scan": {
+    "threat_feed_url": "https://example.com/threat_db.json",
+    "threat_feed_interval_hours": 24,
+    "threat_db_path": "C:\\RomScanner\\threat_db.json"
+  }
+}
+```
+
+Update manually or on a schedule:
+
+```powershell
+rom-scanner update-threat-db
+rom-scanner update-threat-db --force
+```
+
+The watch daemon calls `update_if_stale()` on startup when `threat_feed_url` is set. ETag-based conditional fetch avoids re-downloading unchanged feeds.
+
+## Sandbox monitoring
+
+Behavioral sandbox settings under `sandbox` in `config.json`:
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `preferred_emulator` | `auto` | `auto`, `ryujinx`, or `yuzu` |
+| `monitor_registry` | `true` | Diff HKCU/HKLM Run and RunOnce before/after emulator run |
+| `monitor_fs_depth` | `basic` | `basic` = temp-dir snapshot diff; `deep` = also scan AppData/Desktop for new executables |
+
+Network monitoring uses PID-filtered `netstat -ano` (Windows) or `ss -tupn` (Linux).
 
 ## Ryujinx approved library
 

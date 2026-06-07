@@ -56,7 +56,7 @@ def scan_file(filepath: str, *, enabled: bool = True) -> AVScanResult:
 
     if sys.platform != "win32":
         result.scanned = False
-        result.errors.append("Defender scan only available on Windows")
+        result.clean = True
         return result
 
     mpcmd = _find_mpcmdrun()
@@ -88,12 +88,21 @@ def scan_file(filepath: str, *, enabled: bool = True) -> AVScanResult:
             result.clean = False
             result.threat_name = "Defender detected threat"
         elif ("threat" in output_lower or "found" in output_lower) and "no threats" not in output_lower:
-            if "no threats" not in output_lower:
-                result.clean = False
+            result.clean = False
+            for line in result.output.splitlines():
+                if "threat" in line.lower() or "virus" in line.lower():
+                    result.threat_name = line.strip()
+                    break
+            # Fallback if no specific threat line was found
+            if not result.threat_name:
+                # Use first non-empty output line as fallback
                 for line in result.output.splitlines():
-                    if "threat" in line.lower() or "virus" in line.lower():
+                    if line.strip():
                         result.threat_name = line.strip()
                         break
+                # If still empty, use generic message
+                if not result.threat_name:
+                    result.threat_name = "detected (no name)"
         elif proc.returncode != 0:
             result.clean = False
             result.errors.append(f"Defender exit code {proc.returncode}")

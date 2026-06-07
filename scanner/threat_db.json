@@ -1,11 +1,21 @@
 {
+  "_meta": {
+    "version": "1.0.0",
+    "updated": "2026-06-07",
+    "description": "Known-malicious ROM hashes for Nintendo Switch NSP/XCI files.",
+    "sources": [
+      "https://www.virustotal.com",
+      "Community threat intel feeds",
+      "Manual analysis"
+    ],
+    "note": "Example/placeholder entries below are marked with _EXAMPLE prefix. Replace with verified hashes from your threat intel sources before production use."
+  },
   "sha256": {
+    "_EXAMPLE_trojanized_nsp_payload_dropper": "EXAMPLE — replace with real SHA-256 hash of known-bad payload (64 hex chars)",
+    "_EXAMPLE_sx_os_installer_trojan": "EXAMPLE — replace with real SHA-256 hash of trojanized SX OS installer",
+    "_EXAMPLE_nsp_bitcoin_miner": "EXAMPLE — replace with real SHA-256 hash of NSP-embedded coin miner"
   },
   "md5": {
-  },
-  "_comment": "Add known-malicious ROM hashes here. Keys are hashes, values are descriptions.",
-  "_sources": [
-    "https://www.virustotal.com",
-    "Community threat intel feeds"
-  ]
+    "_EXAMPLE_known_bad_nca_md5": "EXAMPLE — replace with real MD5 hash of known-malicious .nca file (32 hex chars)"
+  }
 }
